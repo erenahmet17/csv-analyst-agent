@@ -36,7 +36,8 @@ Done: 18 tool calls, 5 charts.
 - **Numbers you can check.** Every number must come from a tool result, and every tool call is
   logged with its input and output in `steps.jsonl`. The report ends with a table of all steps.
 - **Statistics, not impressions.** Group differences come with Welch t / Mann-Whitney U /
-  ANOVA / Kruskal-Wallis / chi-square, plus Cohen's d or Cramér's V. Correlations come with a
+  ANOVA / Kruskal-Wallis / chi-square, plus an effect size (Cohen's d, η² or Cramér's V), so
+  "significant" and "important" are kept apart. Correlations come with a
   p-value and a **Benjamini-Hochberg FDR q-value**, so a finding that only looks significant
   because many things were tested is flagged as such.
 - **Charts the model has actually seen.** Each chart goes back to the model as an image, so
@@ -45,9 +46,45 @@ Done: 18 tool calls, 5 charts.
 
 ## Example
 
-<!-- TODO: run on a public dataset and paste 2-3 findings and one chart here. -->
+The [Coffee Quality Institute arabica ratings](https://github.com/jldbc/coffee-quality-database)
+(1,311 coffee lots, 44 columns, MIT licensed) make a good test, because the data has several
+traps:
 
-_An example report on a public dataset is coming soon._
+```bash
+csvagent analyze arabica_data_cleaned.csv -q "Analyze this coffee quality data. Check data \
+quality first, then find the factors associated with the total cupping score (Total.Cup.Points), \
+such as country, altitude, processing method, moisture and defects. ..."
+```
+
+In 21 tool calls (about 47k input and 6k output tokens) the agent caught every trap on its own.
+Quoted from [the report](docs/example/report.md):
+
+- **Impossible values:** "One lot has Total.Cup.Points = 0 … an error or placeholder" and
+  altitudes of "1, 110,000 and 190,164 m. These are typos or unit errors."
+- **Disguised missing values:** "252 lots (19%) have Moisture = 0. A grain moisture of exactly
+  0 is not physically possible, so these are almost certainly missing values."
+- **Leakage:** the sensory sub-scores "are components of the total, so the strong correlation
+  is largely built in", and the `Unnamed: 0` column "has a Spearman correlation of −0.9999 with
+  the score. The file is sorted by score, so the index must be excluded from any model."
+
+And it tested what it found instead of eyeballing it:
+
+- **Country matters most** among the requested factors: across the 19 countries with at least
+  10 lots, "ANOVA p = 5.6e-24, Kruskal-Wallis p = 4.5e-47, eta² = 0.118". Ethiopia (85.5,
+  n=44) and Kenya (84.3, n=25) lead. The 17 smaller countries were left out of the test.
+- **Processing method barely matters:** "ANOVA p = 0.044 … but eta² = 0.008. Method explains
+  less than 1% of the variance." Significant, but not important.
+- **Altitude is non-linear and confounded:** Spearman r = 0.25. The score is flat up to about
+  1,500 m and only rises above it, and "high-altitude countries such as Ethiopia and Kenya also
+  score highest."
+
+<p align="center">
+  <img src="docs/example/charts/02_bar_Country_of_Origin_Total_Cup_Points.png" width="520"
+       alt="Mean cupping score by country, sorted, with the number of lots per country">
+</p>
+
+Every number above comes from a logged tool call: see the
+[full report](docs/example/report.md) and its [step log](docs/example/steps.jsonl).
 
 ## Quick start
 
@@ -81,7 +118,8 @@ csvagent analyze data.csv --out reports/run1 --max-steps 30 --model claude-haiku
 
 | Option | Default | What it does |
 |---|---|---|
-| `-q`, `--question` | general exploration | What you want to know. The report is written in this language. |
+| `-q`, `--question` | general exploration | What you want to know |
+| `--language` | detected from the question | Report language, e.g. `English`. English and Turkish questions are detected automatically. |
 | `--out` | `reports/<name>_<time>` | Output folder |
 | `--model` | `$CSVAGENT_MODEL` or `claude-sonnet-5-5` | Claude model to use |
 | `--max-steps` | 20 | Max model turns (one turn can call several tools) |
@@ -129,8 +167,10 @@ report.md + report.html (charts embedded) + steps.jsonl (audit log)
 The loop is written directly on the Anthropic Messages API, with no agent framework, so
 every step is visible in [`agent.py`](src/csvagent/agent.py):
 
-1. The model gets the task (with today's date, so recent timestamps are not mistaken for
-   future dates) and the tool definitions as JSON schemas.
+1. The model gets the task and the tool definitions as JSON schemas. The task states today's
+   date, so recent timestamps are not mistaken for future dates, and names the report
+   language explicitly, because "the language of the question" alone once produced a German
+   report for an English question.
 2. It replies with `tool_use` blocks. The loop runs each tool and sends all results back in
    one message as `tool_result` blocks. Charts go back as image blocks.
 3. A failed call (a wrong column name, a missing chart argument) goes back with
@@ -151,8 +191,8 @@ every step is visible in [`agent.py`](src/csvagent/agent.py):
 | `crosstab` | Two categorical columns: counts and row percentages |
 | `binned_rate` | Target mean per quantile bin of a numeric column (non-linear effects) |
 | `find_outliers` | IQR outliers with bounds and the most extreme values |
-| `compare_groups` | Welch t + Mann-Whitney U + Cohen's d, ANOVA + Kruskal-Wallis, or chi-square + Cramér's V |
-| `plot` | histogram, bar, box, scatter, heatmap, line: saved as PNG and returned to the model |
+| `compare_groups` | Welch t + Mann-Whitney U + Cohen's d, ANOVA + Kruskal-Wallis + η², or chi-square + Cramér's V. Groups too small to test are left out and listed. |
+| `plot` | histogram, bar, box, scatter, heatmap, line: saved as PNG and returned to the model. Bars with many categories are drawn horizontally, sorted, with n and values. |
 
 ### Why typed tools instead of generated code?
 
