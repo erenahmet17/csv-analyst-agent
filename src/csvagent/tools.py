@@ -154,10 +154,38 @@ def column_summary(tb: Toolbox, column: str) -> ToolOutput:
 # --------------------------------------------------------------------------- relationships
 
 
+def _corr_pvalues(r: np.ndarray, n: np.ndarray) -> np.ndarray:
+    """Two-sided p-values for H0: correlation = 0, from r and the number of pairs n.
+
+    Uses t = r * sqrt((n - 2) / (1 - r^2)) with n - 2 degrees of freedom: exact for
+    Pearson and the same approximation scipy.stats.spearmanr uses for Spearman."""
+    r = np.asarray(r, dtype=float)
+    n = np.asarray(n, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = r * np.sqrt((n - 2) / (1 - r**2))
+        p = 2 * stats.t.sf(np.abs(t), n - 2)
+    p = np.where(np.abs(r) >= 1, 0.0, p)
+    return np.where(n > 2, p, np.nan)
+
+
+def _with_tests(r: pd.Series, n: pd.Series) -> pd.DataFrame:
+    """r, p, FDR q (Benjamini-Hochberg over all rows) and n, strongest |r| first."""
+    n = n.reindex(r.index)  # stack() drops NaN r (constant columns) but not their n
+    table = pd.DataFrame({"r": r, "p": _corr_pvalues(r.to_numpy(), n.to_numpy()), "n": n})
+    table = table.dropna(subset=["r", "p"])  # constant columns have no correlation
+    table["q_fdr"] = stats.false_discovery_control(table["p"]) if len(table) else []
+    table["n"] = table["n"].astype(int)
+    table = table[["r", "p", "q_fdr", "n"]]
+    return table.reindex(table["r"].abs().sort_values(ascending=False).index)
+
+
 @tool(
     "correlations",
-    "Correlations between numeric columns. With `target`: every numeric column's correlation "
-    "with the target, sorted by strength. Without: the strongest column pairs.",
+    "Correlations between numeric columns, each with a significance test: p (two-sided test "
+    "of r = 0), q_fdr (p adjusted for multiple comparisons, Benjamini-Hochberg, over every "
+    "correlation in the result) and n (rows where both columns are present). With `target`: "
+    "every numeric column's correlation with the target, sorted by strength. Without: the "
+    "strongest column pairs.",
     {
         **_col("target", "Optional numeric target column"),
         "method": {"type": "string", "enum": ["pearson", "spearman"], "default": "spearman"},
@@ -167,17 +195,21 @@ def correlations(tb: Toolbox, target: str | None = None, method: str = "spearman
     num = tb.df[tb.data.numeric_columns()]
     if num.shape[1] < 2:
         raise ValueError("need at least two numeric columns")
-    corr = num.corr(method=method)
+    corr = num.corr(method=method)  # pairwise-complete, like n below
+    present = num.notna().astype(int)
+    n_pairs = present.T @ present  # rows where both columns are present
+    note = "p: test of r = 0; q_fdr: p adjusted for the {k} tests in this result"
     if target:
         tb.data.require(target)
         if target not in corr:
             raise ValueError(f"{target!r} is not numeric")
-        s = corr[target].drop(target)
-        s = s.reindex(s.abs().sort_values(ascending=False).index)
-        return ToolOutput(f"{method} correlation with {target}:\n{_table(s.rename('r'))}")
-    pairs = corr.where(np.triu(np.ones(corr.shape, dtype=bool), k=1)).stack()
-    pairs = pairs.reindex(pairs.abs().sort_values(ascending=False).index)
-    return ToolOutput(f"Strongest {method} correlations:\n{_table(pairs.rename('r'), 15)}")
+        table = _with_tests(corr[target].drop(target), n_pairs[target].drop(target))
+        head = f"{method} correlation with {target} ({note.format(k=len(table))}):"
+        return ToolOutput(f"{head}\n{_table(table)}")
+    upper = np.triu(np.ones(corr.shape, dtype=bool), k=1)
+    table = _with_tests(corr.where(upper).stack(), n_pairs.where(upper).stack())
+    head = f"Strongest {method} correlations ({note.format(k=len(table))}):"
+    return ToolOutput(f"{head}\n{_table(table, 15)}")
 
 
 @tool(

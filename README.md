@@ -43,7 +43,7 @@ report.md + report.html (charts embedded) + steps.jsonl (audit log)
 |---|---|
 | `describe_dataset` | Size, column types, missing values, distinct values, duplicates, sample rows |
 | `column_summary` | Statistics or value counts for one column, including the number of exact zeros (often disguised missing values) |
-| `correlations` | Spearman/Pearson correlations, with a target or the strongest pairs |
+| `correlations` | Spearman/Pearson correlations, with a target or the strongest pairs, each with a p-value, an FDR-adjusted q-value (Benjamini-Hochberg) and n |
 | `group_stats` | A numeric column summarized per group |
 | `crosstab` | Two categorical columns, counts and row percentages |
 | `binned_rate` | Target rate per quantile bin of a numeric column (non-linear effects) |

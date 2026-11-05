@@ -1,7 +1,8 @@
+import numpy as np
 import pytest
 
 from csvagent.data import Dataset, load_csv
-from csvagent.tools import PLOT_KINDS
+from csvagent.tools import PLOT_KINDS, Toolbox
 
 
 def test_kinds(data):
@@ -49,6 +50,33 @@ def test_unknown_column_error_lists_columns(toolbox):
 def test_correlations_with_target(toolbox):
     out = toolbox.run("correlations", {"target": "HeartDisease"})
     assert "Age" in out.text and "MaxHR" in out.text
+    assert "q_fdr" in out.text and "3 tests" in out.text
+
+
+@pytest.mark.parametrize("method", ["pearson", "spearman"])
+def test_correlation_pvalues_match_scipy(data, method):
+    from scipy import stats
+
+    from csvagent.tools import _corr_pvalues
+
+    df = data.df.copy()
+    df.loc[::7, "MaxHR"] = np.nan  # pairwise-complete n must be used
+    pair = df[["MaxHR", "HeartDisease"]].dropna()
+    test = stats.pearsonr if method == "pearson" else stats.spearmanr
+    expected = test(pair["MaxHR"], pair["HeartDisease"])
+    r = df["MaxHR"].corr(df["HeartDisease"], method=method)
+    assert r == pytest.approx(expected.statistic)
+    assert _corr_pvalues(r, len(pair)) == pytest.approx(expected.pvalue, rel=1e-6)
+
+
+def test_correlations_skip_constant_columns_and_use_pairwise_n(data, tmp_path):
+    df = data.df.copy()
+    df["Constant"] = 1.0
+    df.loc[::7, "MaxHR"] = np.nan
+    out = Toolbox(Dataset(df, "d"), tmp_path).run("correlations", {}).text
+    assert "Constant" not in out
+    assert "6 tests" in out  # 4 non-constant numeric columns -> 6 pairs
+    assert " 257" in out and " 300" in out  # MaxHR pairs have fewer rows
 
 
 def test_group_stats_crosstab_binned_rate(toolbox):

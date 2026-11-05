@@ -100,6 +100,14 @@ def test_default_model_is_read_at_call_time(toolbox, fake, monkeypatch):
     assert CSVAgent(toolbox, client=fake.Client([]), model="explicit").model == "explicit"
 
 
+def test_task_tells_the_model_todays_date(toolbox, fake):
+    from datetime import date
+
+    client = fake.Client([fake.response(fake.text("ok"), stop="end_turn")])
+    CSVAgent(toolbox, client=client, today=date(2026, 11, 5)).run("x")
+    assert "Today's date: 2026-11-05." in client.requests[0]["messages"][0]["content"]
+
+
 def test_images_can_be_disabled(toolbox, fake):
     client = fake.Client(
         [

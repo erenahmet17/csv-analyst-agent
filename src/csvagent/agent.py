@@ -16,6 +16,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from .tools import Toolbox
@@ -41,8 +42,10 @@ impossible values (for example zeros in a column where zero is not physically po
 usually means a missing value).
 3. Explore the relationships that matter for the user's question: correlations, group \
 comparisons, crosstabs, rates by bins.
-4. Before you claim that a difference or association is real, test it with compare_groups and \
-report the p-value and effect size. Say "associated with", never "causes".
+4. Before you claim that a difference or association is real, test it and report the p-value \
+and effect size: compare_groups for differences between groups, the p-values from correlations \
+for two numeric columns. When you run many tests, prefer the FDR-adjusted q-value. Say \
+"associated with", never "causes".
 5. Draw 4-8 charts that support the key findings. Look at each chart you get back and describe \
 what it shows. Do not draw charts you will not use.
 6. Never invent numbers. Every number in the report must come from a tool result.
@@ -112,6 +115,7 @@ class CSVAgent:
         max_steps: int = 20,
         max_tokens: int = 8192,
         send_images: bool = True,
+        today: date | None = None,
     ):
         if client is None:
             from anthropic import Anthropic
@@ -123,6 +127,7 @@ class CSVAgent:
         self.max_steps = max_steps
         self.max_tokens = max_tokens
         self.send_images = send_images
+        self.today = today  # None: the real date at run time (fixed only in tests)
 
     def _call(self, messages: list[dict], result: AgentResult, **kw):
         resp = self.client.messages.create(
@@ -149,7 +154,11 @@ class CSVAgent:
 
     def run(self, question: str, on_step: Callable[[Step], None] | None = None) -> AgentResult:
         data = self.toolbox.data
+        # The model does not know today's date on its own. Without it, recent timestamps
+        # in the data look like "future dates" and get flagged as errors.
+        today = self.today or date.today()
         task = (
+            f"Today's date: {today.isoformat()}.\n"
             f"Dataset: '{data.name}' ({len(data.df)} rows, {data.df.shape[1]} columns).\n\n"
             f"Request: {question}"
         )
