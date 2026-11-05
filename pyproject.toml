@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csvagent"
+version = "0.1.0"
+description = "An LLM agent that analyzes CSV files with safe, typed tools, draws charts and writes a report."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "scipy>=1.11",
+    "anthropic>=0.40",
+    "markdown>=3.5",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+app = ["streamlit>=1.35"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+csvagent = "csvagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
