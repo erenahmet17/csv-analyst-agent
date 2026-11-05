@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -46,12 +47,12 @@ comparisons, crosstabs, rates by bins.
 and effect size: compare_groups for differences between groups, the p-values from correlations \
 for two numeric columns. When you run many tests, prefer the FDR-adjusted q-value. Say \
 "associated with", never "causes".
-5. Draw 4-8 charts that support the key findings. Look at each chart you get back and describe \
-what it shows. Do not draw charts you will not use.
+5. Draw 4-8 charts that support the key findings, with titles in the report language. Look at \
+each chart you get back and describe what it shows. Do not draw charts you will not use.
 6. Never invent numbers. Every number in the report must come from a tool result.
 
 When you are done, reply WITHOUT calling a tool, with the final report in Markdown, in the \
-language of the user's request. Use these sections:
+report language stated in the task. Use these sections:
 - Summary (3-4 sentences)
 - Data quality (issues found and how they affect the analysis)
 - Findings (each with its numbers, test result and chart, embedded as ![title](charts/...))
@@ -100,6 +101,24 @@ def _block_to_dict(b) -> dict | None:
     return None
 
 
+_TURKISH_CHARS = set("çğıöşüÇĞİÖŞÜ")
+_TURKISH_WORDS = {"ve", "bu", "ile", "bir", "için", "neler", "nedir", "analiz", "et", "veri"}
+_ENGLISH_WORDS = {"the", "and", "of", "to", "this", "with", "which", "what", "is", "are", "for"}
+
+
+def guess_language(text: str) -> str | None:
+    """'Turkish' or 'English' when the question is clearly one of them, else None.
+
+    Deliberately simple and conservative: a wrong guess is worse than no guess, because
+    with None the model still picks the language of the request itself."""
+    words = set(re.findall(r"[^\W\d_]+", text.lower()))
+    if any(c in _TURKISH_CHARS for c in text) or len(words & _TURKISH_WORDS) >= 2:
+        return "Turkish"
+    if text.isascii() and len(words & _ENGLISH_WORDS) >= 2:
+        return "English"
+    return None
+
+
 def _image_block(path) -> dict:
     with open(path, "rb") as f:
         data = base64.standard_b64encode(f.read()).decode()
@@ -116,6 +135,7 @@ class CSVAgent:
         max_tokens: int = 8192,
         send_images: bool = True,
         today: date | None = None,
+        language: str | None = None,
     ):
         if client is None:
             from anthropic import Anthropic
@@ -128,6 +148,7 @@ class CSVAgent:
         self.max_tokens = max_tokens
         self.send_images = send_images
         self.today = today  # None: the real date at run time (fixed only in tests)
+        self.language = language  # None: guess_language(question), else the model decides
 
     def _call(self, messages: list[dict], result: AgentResult, **kw):
         resp = self.client.messages.create(
@@ -157,10 +178,21 @@ class CSVAgent:
         # The model does not know today's date on its own. Without it, recent timestamps
         # in the data look like "future dates" and get flagged as errors.
         today = self.today or date.today()
+        # Name the language. "The language of the request" alone was not enough: in two
+        # runs on an English request the model switched to German at its first chart
+        # title and wrote the whole report in German.
+        language = self.language or guess_language(question)
+        if language:
+            rule = f"Write the final report and every chart title in {language}."
+        else:
+            rule = (
+                "Write the final report and every chart title in the same language as the "
+                "Request above (not the language of the column names or the data)."
+            )
         task = (
             f"Today's date: {today.isoformat()}.\n"
             f"Dataset: '{data.name}' ({len(data.df)} rows, {data.df.shape[1]} columns).\n\n"
-            f"Request: {question}"
+            f"Request: {question}\n\n{rule}"
         )
         messages: list[dict] = [{"role": "user", "content": task}]
         result = AgentResult(report="", steps=[], charts=[], stop_reason="done", model=self.model)

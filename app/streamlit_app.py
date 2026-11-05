@@ -36,6 +36,7 @@ with st.sidebar:
     model = st.text_input("Model", default_model())
     max_steps = st.slider("Max model turns (each can call several tools)", 5, 40, 20)
     send_images = st.checkbox("Let the agent see its charts", value=True)
+    language = st.text_input("Report language (blank: detect from the question)", "")
 
 uploaded = st.file_uploader("CSV file", type=["csv"])
 question = st.text_area("What do you want to know?", DEFAULT_QUESTION, height=90)
@@ -55,7 +56,13 @@ if uploaded and st.button("Analyze", type="primary"):
     csv_path.write_bytes(uploaded.getvalue())
     data = Dataset(load_csv(csv_path), Path(uploaded.name).stem)
     out = tmp / f"report_{datetime.now():%H%M%S}"
-    agent = CSVAgent(Toolbox(data, out), model=model, max_steps=max_steps, send_images=send_images)
+    agent = CSVAgent(
+        Toolbox(data, out),
+        model=model,
+        max_steps=max_steps,
+        send_images=send_images,
+        language=language.strip() or None,
+    )
 
     st.write(f"**{data.name}**: {len(data.df)} rows, {data.df.shape[1]} columns")
     with st.status("The agent is analyzing...", expanded=True) as status:

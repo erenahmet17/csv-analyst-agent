@@ -9,6 +9,7 @@ error back to the model so it can correct itself.
 from __future__ import annotations
 
 import re
+import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -293,27 +294,58 @@ def find_outliers(tb: Toolbox, column: str) -> ToolOutput:
 # --------------------------------------------------------------------------- statistics
 
 
+MAX_TEST_GROUPS = 50
+
+
 @tool(
     "compare_groups",
     "Statistical test of whether `column` differs between the groups of `group_by`. Numeric "
     "column: Welch t-test + Mann-Whitney U with Cohen's d (2 groups) or ANOVA + Kruskal-Wallis "
-    "(3+ groups). Categorical column: chi-square test with Cramer's V. Use it before claiming "
+    "with eta-squared (3+ groups). Categorical column: chi-square test with Cramer's V. Groups "
+    "smaller than `min_group_size` are left out (and listed), so a column with many levels, "
+    "such as country, can still be tested on its well-sampled groups. Use it before claiming "
     "that a difference is real.",
-    {**_col("column"), **_col("group_by")},
+    {
+        **_col("column"),
+        **_col("group_by"),
+        "min_group_size": {
+            "type": "integer",
+            "minimum": 2,
+            "default": 5,
+            "description": "Leave out groups with fewer rows than this",
+        },
+    },
     required=["column", "group_by"],
 )
-def compare_groups(tb: Toolbox, column: str, group_by: str) -> ToolOutput:
+def compare_groups(tb: Toolbox, column: str, group_by: str, min_group_size: int = 5) -> ToolOutput:
     tb.data.require(column, group_by)
     df = tb.df[[column, group_by]].dropna()
+    sizes = df[group_by].value_counts()
+    small = sizes[sizes < min_group_size]
+    df = df[~df[group_by].isin(small.index)]
     groups = {str(k): g[column] for k, g in df.groupby(group_by)}
     if len(groups) < 2:
-        raise ValueError(f"{group_by!r} has fewer than two groups")
-    if len(groups) > 20:
-        raise ValueError(f"{group_by!r} has {len(groups)} groups; use a categorical column")
+        raise ValueError(
+            f"{group_by!r} has fewer than two groups with at least {min_group_size} rows"
+        )
+    if len(groups) > MAX_TEST_GROUPS:
+        raise ValueError(
+            f"{group_by!r} has {len(groups)} groups with at least {min_group_size} rows; "
+            f"use a categorical column with fewer levels or raise min_group_size"
+        )
+    left_out = ""
+    if len(small):
+        names = ", ".join(f"{k} (n={v})" for k, v in small.head(10).items())
+        more = f" and {len(small) - 10} more" if len(small) > 10 else ""
+        left_out = (
+            f"\nLeft out {len(small)} groups with fewer than {min_group_size} rows "
+            f"({int(small.sum())} rows): {names}{more}"
+        )
 
     if tb.data.kind(column) == "numeric":
         vals = list(groups.values())
-        means = ", ".join(f"{k}: mean {v.mean():.4g} (n={len(v)})" for k, v in groups.items())
+        ordered = sorted(groups.items(), key=lambda kv: kv[1].mean(), reverse=True)
+        means = ", ".join(f"{k}: mean {v.mean():.4g} (n={len(v)})" for k, v in ordered)
         if len(vals) == 2:
             a, b = vals
             t = stats.ttest_ind(a, b, equal_var=False)
@@ -329,8 +361,12 @@ def compare_groups(tb: Toolbox, column: str, group_by: str) -> ToolOutput:
         else:
             f = stats.f_oneway(*vals)
             k = stats.kruskal(*vals)
-            body = f"ANOVA p={f.pvalue:.3g}; Kruskal-Wallis p={k.pvalue:.3g}"
-        return ToolOutput(f"{column} by {group_by}: {means}\n{body}")
+            body = (
+                f"{len(vals)} groups: ANOVA p={f.pvalue:.3g}; Kruskal-Wallis p={k.pvalue:.3g}; "
+                f"eta-squared={_eta_squared(vals):.3f} (share of variance explained by the "
+                f"groups; 0.01 small, 0.06 medium, 0.14 large)"
+            )
+        return ToolOutput(f"{column} by {group_by}: {means}\n{body}{left_out}")
 
     table = pd.crosstab(df[group_by], df[column])
     chi2, p, dof, expected = stats.chi2_contingency(table)
@@ -339,8 +375,17 @@ def compare_groups(tb: Toolbox, column: str, group_by: str) -> ToolOutput:
     warn = " (warning: some expected counts < 5)" if (expected < 5).any() else ""
     return ToolOutput(
         f"{column} vs {group_by}: chi-square={chi2:.2f}, dof={dof}, p={p:.3g}, "
-        f"Cramer's V={v:.2f} (0.1 small, 0.3 medium, 0.5 large){warn}"
+        f"Cramer's V={v:.2f} (0.1 small, 0.3 medium, 0.5 large){warn}{left_out}"
     )
+
+
+def _eta_squared(groups: list[pd.Series]) -> float:
+    """Between-group sum of squares / total sum of squares (one-way ANOVA effect size)."""
+    values = pd.concat(groups)
+    grand = values.mean()
+    total = float(((values - grand) ** 2).sum())
+    between = float(sum(len(g) * (g.mean() - grand) ** 2 for g in groups))
+    return between / total if total else float("nan")
 
 
 # --------------------------------------------------------------------------- charts
@@ -383,8 +428,13 @@ def plot(
         raise ValueError(f"{kind} needs y")
     fig, ax = plt.subplots(figsize=(7, 4.5), dpi=100)
     try:
-        _draw(tb, fig, ax, kind, x, y, hue, bins)
-        ax.set_title(title, fontsize=11)
+        note = _draw(tb, fig, ax, kind, x, y, hue, bins)
+        # The model writes finding-style titles that are often longer than the plot is
+        # wide (very much so next to long category labels): wrap to the axes' width.
+        fig.tight_layout()
+        axes_inches = ax.get_position().width * fig.get_size_inches()[0]
+        chars = max(30, int(axes_inches * 11))  # ~11 characters per inch at 11 pt
+        ax.set_title(textwrap.fill(title, width=chars), fontsize=11)
         fig.tight_layout()
         slug = re.sub(r"[^a-zA-Z0-9]+", "_", f"{kind}_{x or ''}_{y or ''}_{hue or ''}").strip("_")
         path = tb.out_dir / "charts" / f"{len(tb.charts) + 1:02d}_{slug}.png"
@@ -394,13 +444,64 @@ def plot(
         plt.close(fig)
     tb.charts.append(path)
     rel = path.relative_to(tb.out_dir).as_posix()
-    return ToolOutput(f"Saved chart {rel}. Reference it in the report as ![{title}]({rel}).", path)
+    return ToolOutput(
+        f"Saved chart {rel}. Reference it in the report as ![{title}]({rel}).{note}", path
+    )
+
+
+MAX_BAR_LEVELS = 30
+
+
+def _draw_bar(fig, ax, df: pd.DataFrame, x: str, y: str | None, hue: str | None) -> str:
+    """Bar chart that stays readable with many or long category names.
+
+    Few short categories: vertical bars in their natural order. Otherwise horizontal
+    bars sorted by value (largest on top), on a taller figure. Returns a note for the
+    model when categories had to be dropped."""
+    note = ""
+    counts = df[x].value_counts()
+    if len(counts) > MAX_BAR_LEVELS:
+        df = df[df[x].isin(counts.index[:MAX_BAR_LEVELS])]
+        note = f" Showing the {MAX_BAR_LEVELS} largest of {len(counts)} '{x}' groups."
+    labels = [str(v) for v in df[x].dropna().unique()]
+    horizontal = len(labels) > 8 or max(map(len, labels), default=0) > 12
+    if horizontal:
+        fig.set_size_inches(7, max(4.5, 0.3 * len(labels) + 1.5))
+    style = "barh" if horizontal else "bar"
+
+    if hue:
+        pct = pd.crosstab(df[x], df[hue], normalize="index") * 100
+        pct.plot(kind=style, ax=ax, rot=0)
+        ax.legend(title=hue, bbox_to_anchor=(1.01, 1), loc="upper left")
+        value_label = f"% within {x}"
+    elif y:
+        table = df.groupby(x)[y].agg(["mean", "count"])
+        if horizontal:
+            table = table.sort_values("mean")
+        # show n, so a mean from one or two rows is not read like a reliable one
+        table.index = [f"{k} (n={n})" for k, n in table["count"].items()]
+        table["mean"].plot(kind=style, ax=ax, rot=0)
+        # bars start at 0, so means a few points apart look identical: print the values
+        ax.bar_label(ax.containers[0], fmt="%.4g", fontsize=7, padding=2)
+        ax.margins(**({"x": 0.12} if horizontal else {"y": 0.12}))
+        value_label = f"mean {y}"
+    else:
+        s = df[x].value_counts()
+        s = s.sort_values() if horizontal else s.sort_index()
+        s.plot(kind=style, ax=ax, rot=0)
+        value_label = "count"
+
+    ax.set_xlabel(value_label if horizontal else x)
+    ax.set_ylabel(x if horizontal else value_label)
+    return note
 
 
 def _draw(
     tb: Toolbox, fig, ax, kind: str, x: str | None, y: str | None, hue: str | None, bins: int
-) -> None:
-    """Draw one chart of `kind` on `ax` (arguments already validated by `plot`)."""
+) -> str:
+    """Draw one chart of `kind` on `ax` (arguments already validated by `plot`).
+
+    Returns a note for the model about the chart, or ""."""
     df = tb.df
     if kind == "histogram":
         if hue:
@@ -412,18 +513,7 @@ def _draw(
         ax.set_xlabel(x)
         ax.set_ylabel("count")
     elif kind == "bar":
-        if hue:
-            pct = pd.crosstab(df[x], df[hue], normalize="index") * 100
-            pct.plot(kind="bar", ax=ax, rot=0)
-            ax.legend(title=hue, bbox_to_anchor=(1.01, 1), loc="upper left")
-            ax.set_ylabel(f"% within {x}")
-        elif y:
-            df.groupby(x)[y].mean().plot(kind="bar", ax=ax, rot=0)
-            ax.set_ylabel(f"mean {y}")
-        else:
-            df[x].value_counts().sort_index().plot(kind="bar", ax=ax, rot=0)
-            ax.set_ylabel("count")
-        ax.set_xlabel(x)
+        return _draw_bar(fig, ax, df, x, y, hue)
     elif kind == "box":
         levels = sorted(df[x].dropna().unique(), key=str)
         ax.boxplot(
@@ -456,3 +546,4 @@ def _draw(
                 color = "white" if abs(v) > 0.6 else "black"
                 ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7, color=color)
         fig.colorbar(im, ax=ax)
+    return ""

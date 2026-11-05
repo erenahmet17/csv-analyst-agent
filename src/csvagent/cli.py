@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> None:
         "--max-steps", type=int, default=20, help="max model turns (a turn can call several tools)"
     )
     a.add_argument("--max-tokens", type=int, default=8192, help="max output tokens per turn")
+    a.add_argument(
+        "--language",
+        default=None,
+        help="report language, e.g. English (default: detected from the question)",
+    )
     a.add_argument("--no-images", action="store_true", help="do not send charts back to the model")
     args = p.parse_args(argv)
 
@@ -61,6 +66,7 @@ def main(argv: list[str] | None = None) -> None:
         max_steps=args.max_steps,
         max_tokens=args.max_tokens,
         send_images=not args.no_images,
+        language=args.language,
     )
 
     print(f"Analyzing {args.csv} ({len(data.df)} rows) with {args.model}...\n")

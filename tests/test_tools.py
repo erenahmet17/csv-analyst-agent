@@ -126,6 +126,49 @@ def test_plot_validates_arguments(toolbox):
     assert len(PLOT_KINDS) == 6
 
 
+def _many_groups(tmp_path, levels: int = 40):
+    """Toolbox over a frame where `country` has many levels, some with only 1-2 rows."""
+    import pandas as pd
+
+    rng = np.random.default_rng(1)
+    sizes = [30] * 10 + [2] * (levels - 10)
+    country = np.repeat([f"Country number {i}" for i in range(levels)], sizes)
+    score = rng.normal(80, 3, len(country)) + np.repeat(np.arange(levels) % 5, sizes)
+    df = pd.DataFrame({"country": country, "score": score})
+    return Toolbox(Dataset(df, "many"), tmp_path), df
+
+
+def test_compare_groups_with_many_groups_leaves_out_small_ones(tmp_path):
+    from scipy import stats
+
+    tb, df = _many_groups(tmp_path)
+    out = tb.run("compare_groups", {"column": "score", "group_by": "country"}).text
+    assert "10 groups: ANOVA" in out
+    assert "Left out 30 groups with fewer than 5 rows (60 rows)" in out and "20 more" in out
+    # eta-squared agrees with the F statistic: eta2 = F(k-1) / (F(k-1) + N - k)
+    kept = [g["score"] for _, g in df.groupby("country") if len(g) >= 5]
+    f = stats.f_oneway(*kept).statistic
+    k, n = len(kept), sum(map(len, kept))
+    eta2 = f * (k - 1) / (f * (k - 1) + n - k)
+    assert f"eta-squared={eta2:.3f}" in out
+
+
+def test_compare_groups_errors_when_too_few_groups_are_big_enough(tmp_path):
+    tb, _ = _many_groups(tmp_path)
+    with pytest.raises(ValueError, match="at least 100 rows"):
+        tb.run("compare_groups", {"column": "score", "group_by": "country", "min_group_size": 100})
+
+
+def test_bar_with_many_categories_is_horizontal_and_capped(tmp_path):
+    import matplotlib.image as mpimg
+
+    tb, _ = _many_groups(tmp_path)
+    out = tb.run("plot", {"kind": "bar", "x": "country", "y": "score", "title": "t"})
+    assert "Showing the 30 largest of 40 'country' groups." in out.text
+    height, width = mpimg.imread(out.image).shape[:2]
+    assert height > width  # tall figure: one horizontal bar per country
+
+
 def test_failed_plot_closes_its_figure(toolbox):
     import matplotlib.pyplot as plt
 

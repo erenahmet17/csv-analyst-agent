@@ -1,4 +1,6 @@
-from csvagent.agent import CSVAgent
+import pytest
+
+from csvagent.agent import CSVAgent, guess_language
 from csvagent.report import split_markdown_images, write_report
 
 
@@ -105,7 +107,34 @@ def test_task_tells_the_model_todays_date(toolbox, fake):
 
     client = fake.Client([fake.response(fake.text("ok"), stop="end_turn")])
     CSVAgent(toolbox, client=client, today=date(2026, 11, 5)).run("x")
-    assert "Today's date: 2026-11-05." in client.requests[0]["messages"][0]["content"]
+    task = client.requests[0]["messages"][0]["content"]
+    assert "Today's date: 2026-11-05." in task
+    # the language rule sits right after the request, where the model reads it
+    assert task.index("Request: x") < task.index("same language as the Request")
+
+
+@pytest.mark.parametrize(
+    "question, expected",
+    [
+        ("Analyze this data and find what is linked to the score.", "English"),
+        ("Kalp hastalığıyla en çok ilişkili faktörler neler?", "Turkish"),
+        ("bu veriyi analiz et ve sonuçları yaz", "Turkish"),  # no Turkish letters
+        ("Analysiere diese Daten und finde Muster.", None),  # unknown: model decides
+        ("x", None),
+    ],
+)
+def test_guess_language(question, expected):
+    assert guess_language(question) == expected
+
+
+def test_report_language_is_named_in_the_task(toolbox, fake):
+    def task_for(language=None):
+        client = fake.Client([fake.response(fake.text("ok"), stop="end_turn")])
+        CSVAgent(toolbox, client=client, language=language).run("Analyze this and the rest")
+        return client.requests[0]["messages"][0]["content"]
+
+    assert task_for().endswith("every chart title in English.")  # guessed
+    assert task_for("Spanish").endswith("every chart title in Spanish.")  # explicit wins
 
 
 def test_images_can_be_disabled(toolbox, fake):
