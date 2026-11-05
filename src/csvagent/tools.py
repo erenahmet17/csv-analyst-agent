@@ -349,9 +349,27 @@ def plot(
         raise ValueError(f"{kind} needs x")
     if kind in ("box", "scatter", "line") and not y:
         raise ValueError(f"{kind} needs y")
-    df = tb.df
     fig, ax = plt.subplots(figsize=(7, 4.5), dpi=100)
+    try:
+        _draw(tb, fig, ax, kind, x, y, hue, bins)
+        ax.set_title(title, fontsize=11)
+        fig.tight_layout()
+        slug = re.sub(r"[^a-zA-Z0-9]+", "_", f"{kind}_{x or ''}_{y or ''}_{hue or ''}").strip("_")
+        path = tb.out_dir / "charts" / f"{len(tb.charts) + 1:02d}_{slug}.png"
+        fig.savefig(path)
+    finally:
+        # close even when drawing fails, or every failed call leaks a figure
+        plt.close(fig)
+    tb.charts.append(path)
+    rel = path.relative_to(tb.out_dir).as_posix()
+    return ToolOutput(f"Saved chart {rel}. Reference it in the report as ![{title}]({rel}).", path)
 
+
+def _draw(
+    tb: Toolbox, fig, ax, kind: str, x: str | None, y: str | None, hue: str | None, bins: int
+) -> None:
+    """Draw one chart of `kind` on `ax` (arguments already validated by `plot`)."""
+    df = tb.df
     if kind == "histogram":
         if hue:
             for level, g in df.groupby(hue):
@@ -406,13 +424,3 @@ def plot(
                 color = "white" if abs(v) > 0.6 else "black"
                 ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7, color=color)
         fig.colorbar(im, ax=ax)
-
-    ax.set_title(title, fontsize=11)
-    fig.tight_layout()
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", f"{kind}_{x or ''}_{y or ''}_{hue or ''}").strip("_")
-    path = tb.out_dir / "charts" / f"{len(tb.charts) + 1:02d}_{slug}.png"
-    fig.savefig(path)
-    plt.close(fig)
-    tb.charts.append(path)
-    rel = path.relative_to(tb.out_dir).as_posix()
-    return ToolOutput(f"Saved chart {rel}. Reference it in the report as ![{title}]({rel}).", path)

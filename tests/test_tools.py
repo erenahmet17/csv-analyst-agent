@@ -98,6 +98,16 @@ def test_plot_validates_arguments(toolbox):
     assert len(PLOT_KINDS) == 6
 
 
+def test_failed_plot_closes_its_figure(toolbox):
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    with pytest.raises(TypeError):  # box plot of a text column fails while drawing
+        toolbox.run("plot", {"kind": "box", "x": "Sex", "y": "ChestPainType", "title": "t"})
+    assert plt.get_fignums() == []
+    assert toolbox.charts == []
+
+
 def test_dataset_from_csv(tmp_path, data):
     p = tmp_path / "heart.csv"
     data.df.to_csv(p, index=False)

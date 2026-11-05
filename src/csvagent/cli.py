@@ -20,7 +20,7 @@ DEFAULT_QUESTION = (
 
 def main(argv: list[str] | None = None) -> None:
     # Windows consoles default to a legacy code page (e.g. cp1254) that cannot print
-    # characters such as "\u2212" from the PDFs; never crash on output.
+    # some characters in model output or column names (e.g. "\u2212"); never crash on output.
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> None:
     except ImportError:
         pass
 
-    from .agent import DEFAULT_MODEL, CSVAgent
+    from .agent import CSVAgent, default_model
     from .data import Dataset
     from .report import write_report
     from .tools import Toolbox
@@ -44,8 +44,11 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("csv")
     a.add_argument("--question", "-q", default=DEFAULT_QUESTION)
     a.add_argument("--out", default=None, help="output folder (default: reports/<name>_<time>)")
-    a.add_argument("--model", default=DEFAULT_MODEL)
-    a.add_argument("--max-steps", type=int, default=20)
+    a.add_argument("--model", default=default_model())
+    a.add_argument(
+        "--max-steps", type=int, default=20, help="max model turns (a turn can call several tools)"
+    )
+    a.add_argument("--max-tokens", type=int, default=8192, help="max output tokens per turn")
     a.add_argument("--no-images", action="store_true", help="do not send charts back to the model")
     args = p.parse_args(argv)
 
@@ -53,7 +56,11 @@ def main(argv: list[str] | None = None) -> None:
     out = Path(args.out or f"reports/{data.name}_{datetime.now():%Y%m%d-%H%M}")
     toolbox = Toolbox(data, out)
     agent = CSVAgent(
-        toolbox, model=args.model, max_steps=args.max_steps, send_images=not args.no_images
+        toolbox,
+        model=args.model,
+        max_steps=args.max_steps,
+        max_tokens=args.max_tokens,
+        send_images=not args.no_images,
     )
 
     print(f"Analyzing {args.csv} ({len(data.df)} rows) with {args.model}...\n")
@@ -66,6 +73,8 @@ def main(argv: list[str] | None = None) -> None:
     result = agent.run(args.question, on_step=show)
     paths = write_report(result, out, data.name)
     print(f"\nDone: {len(result.steps)} tool calls, {len(result.charts)} charts.")
+    if result.truncated:
+        print("WARNING: the report was cut off at max_tokens; rerun with a higher --max-tokens.")
     print(f"Tokens in/out: {result.input_tokens}/{result.output_tokens}")
     for kind, path in paths.items():
         print(f"  {kind}: {path}")

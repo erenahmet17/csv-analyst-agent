@@ -14,6 +14,11 @@ from .agent import AgentResult
 
 IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
+TRUNCATED_NOTE = (
+    "**Incomplete report:** the model hit its output token limit (max_tokens) and the "
+    "report below is cut off. Run again with a higher max_tokens (CLI: --max-tokens)."
+)
+
 
 def _steps_table(result: AgentResult) -> str:
     lines = ["| # | Tool | Input | Result |", "|---|---|---|---|"]
@@ -36,7 +41,11 @@ def write_report(result: AgentResult, out_dir: str | Path, dataset_name: str) ->
     if result.stop_reason == "step_limit":
         meta += "\n\n> The agent hit its step limit; the report uses the results gathered so far."
 
-    md = f"{result.report}\n\n---\n{meta}\n\n## Analysis steps\n\n{_steps_table(result)}\n"
+    report = result.report
+    if result.truncated:
+        # Put the warning first: the cut is at the end, where a reader may never look.
+        report = f"> {TRUNCATED_NOTE}\n\n{report}"
+    md = f"{report}\n\n---\n{meta}\n\n## Analysis steps\n\n{_steps_table(result)}\n"
     md_path = out / "report.md"
     md_path.write_text(md, encoding="utf-8")
 

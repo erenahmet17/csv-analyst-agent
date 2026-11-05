@@ -76,6 +76,30 @@ def test_step_limit_forces_a_final_report(toolbox, fake):
     assert last[0]["type"] == "tool_result" and last[-1]["type"] == "text"
 
 
+def test_report_cut_off_at_max_tokens_is_flagged(toolbox, fake):
+    client = fake.Client([fake.response(fake.text("# Report\n\nHalf a sent"), stop="max_tokens")])
+    result = CSVAgent(toolbox, client=client).run("x")
+    assert result.truncated and result.stop_reason == "done"
+    md = write_report(result, toolbox.out_dir, "d")["markdown"].read_text(encoding="utf-8")
+    assert md.startswith("> **Incomplete report:**")
+
+
+def test_complete_report_is_not_flagged(toolbox, fake):
+    client = fake.Client([fake.response(fake.text("full report"), stop="end_turn")])
+    result = CSVAgent(toolbox, client=client).run("x")
+    assert not result.truncated
+    md = write_report(result, toolbox.out_dir, "d")["markdown"].read_text(encoding="utf-8")
+    assert "Incomplete report" not in md
+
+
+def test_default_model_is_read_at_call_time(toolbox, fake, monkeypatch):
+    # The Streamlit app imports the agent before load_dotenv(); the env var set
+    # afterwards must still win.
+    monkeypatch.setenv("CSVAGENT_MODEL", "from-env")
+    assert CSVAgent(toolbox, client=fake.Client([])).model == "from-env"
+    assert CSVAgent(toolbox, client=fake.Client([]), model="explicit").model == "explicit"
+
+
 def test_images_can_be_disabled(toolbox, fake):
     client = fake.Client(
         [

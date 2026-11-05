@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "pandas>=2.0",
     "numpy>=1.26",
-    "matplotlib>=3.8",
+    "matplotlib>=3.9",  # boxplot(tick_labels=...) needs 3.9
     "scipy>=1.11",
     "anthropic>=0.40",
     "markdown>=3.5",

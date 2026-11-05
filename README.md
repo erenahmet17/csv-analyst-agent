@@ -33,7 +33,9 @@ report.md + report.html (charts embedded) + steps.jsonl (audit log)
 3. A failed tool call (wrong column name, wrong chart arguments) goes back with
    `is_error: true` and the list of valid columns, and the model corrects itself.
 4. When the model answers without calling a tool, that answer is the report. At
-   the step limit it is asked to write the report from what it already has.
+   the step limit it is asked to write the report from what it already has. If the
+   report is cut off at the output token limit, it is flagged as incomplete
+   (raise it with `--max-tokens`).
 
 ## Tools
 
@@ -101,7 +103,7 @@ _Run `csvagent analyze heart.csv` and add a short excerpt of the report here._
 ## Tests
 
 ```bash
-pytest -q     # 26 tests, using a fake Anthropic client and a synthetic dataset; no API key needed
+pytest -q     # uses a fake Anthropic client and a synthetic dataset; no API key needed
 ruff check .
 ```
 

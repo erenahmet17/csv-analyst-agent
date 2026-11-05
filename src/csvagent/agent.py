@@ -20,7 +20,16 @@ from typing import Any
 
 from .tools import Toolbox
 
-DEFAULT_MODEL = os.getenv("CSVAGENT_MODEL", "claude-sonnet-5-5")
+FALLBACK_MODEL = "claude-sonnet-5-5"
+
+
+def default_model() -> str:
+    """The model to use when none is given: $CSVAGENT_MODEL, else FALLBACK_MODEL.
+
+    Read on each call rather than at import time, so a .env loaded after this module
+    is imported (as in the Streamlit app) still takes effect."""
+    return os.getenv("CSVAGENT_MODEL") or FALLBACK_MODEL
+
 
 SYSTEM_PROMPT = """You are a careful data analyst. You explore a tabular dataset ONLY through the \
 tools provided and then write a report for a non-expert reader.
@@ -66,6 +75,7 @@ class AgentResult:
     steps: list[Step]
     charts: list[str]
     stop_reason: str  # "done" | "step_limit"
+    truncated: bool = False  # the final report was cut off at max_tokens
     input_tokens: int = 0
     output_tokens: int = 0
     model: str = ""
@@ -88,7 +98,8 @@ def _block_to_dict(b) -> dict | None:
 
 
 def _image_block(path) -> dict:
-    data = base64.standard_b64encode(open(path, "rb").read()).decode()
+    with open(path, "rb") as f:
+        data = base64.standard_b64encode(f.read()).decode()
     return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
 
 
@@ -97,9 +108,9 @@ class CSVAgent:
         self,
         toolbox: Toolbox,
         client=None,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         max_steps: int = 20,
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
         send_images: bool = True,
     ):
         if client is None:
@@ -108,7 +119,7 @@ class CSVAgent:
             client = Anthropic()  # reads ANTHROPIC_API_KEY
         self.toolbox = toolbox
         self.client = client
-        self.model = model
+        self.model = model or default_model()
         self.max_steps = max_steps
         self.max_tokens = max_tokens
         self.send_images = send_images
@@ -129,6 +140,13 @@ class CSVAgent:
             result.output_tokens += getattr(usage, "output_tokens", 0) or 0
         return resp
 
+    def _finish(self, resp, result: AgentResult) -> None:
+        """Take the final report from a reply that called no tool."""
+        result.report = "\n".join(b.text for b in resp.content if b.type == "text").strip()
+        # A reply cut off at max_tokens is an incomplete report. Flag it instead of
+        # passing it off as a finished one.
+        result.truncated = getattr(resp, "stop_reason", None) == "max_tokens"
+
     def run(self, question: str, on_step: Callable[[Step], None] | None = None) -> AgentResult:
         data = self.toolbox.data
         task = (
@@ -144,7 +162,7 @@ class CSVAgent:
             messages.append({"role": "assistant", "content": blocks})
             tool_uses = [b for b in resp.content if b.type == "tool_use"]
             if not tool_uses:
-                result.report = "\n".join(b.text for b in resp.content if b.type == "text").strip()
+                self._finish(resp, result)
                 break
 
             tool_results = []
@@ -191,7 +209,7 @@ class CSVAgent:
                 }
             )
             resp = self._call(messages, result, tool_choice={"type": "none"})
-            result.report = "\n".join(b.text for b in resp.content if b.type == "text").strip()
+            self._finish(resp, result)
 
         result.charts = [str(p) for p in self.toolbox.charts]
         return result
