@@ -7,6 +7,7 @@ csvagent analyze heart.csv -q "Which factors are linked to heart disease?" --out
 from __future__ import annotations
 
 import argparse
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +19,13 @@ DEFAULT_QUESTION = (
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Windows consoles default to a legacy code page (e.g. cp1254) that cannot print
+    # characters such as "\u2212" from the PDFs; never crash on output.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     try:
         from dotenv import load_dotenv
 
