@@ -73,13 +73,18 @@ class AgentResult:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-def _block_to_dict(b) -> dict:
-    """Convert an SDK content block to the plain dict form used in the message history."""
+def _block_to_dict(b) -> dict | None:
+    """Convert an SDK content block to the plain dict form used in the message history.
+
+    Other block types (e.g. thinking blocks) must go back to the API unchanged, so they
+    are passed through with the SDK's own serialisation."""
     if b.type == "text":
         return {"type": "text", "text": b.text}
     if b.type == "tool_use":
         return {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
-    raise ValueError(f"unexpected content block type {b.type!r}")
+    if hasattr(b, "model_dump"):
+        return b.model_dump(exclude_none=True)
+    return None
 
 
 def _image_block(path) -> dict:
@@ -135,9 +140,8 @@ class CSVAgent:
 
         for _ in range(self.max_steps):
             resp = self._call(messages, result)
-            messages.append(
-                {"role": "assistant", "content": [_block_to_dict(b) for b in resp.content]}
-            )
+            blocks = [d for d in (_block_to_dict(b) for b in resp.content) if d is not None]
+            messages.append({"role": "assistant", "content": blocks})
             tool_uses = [b for b in resp.content if b.type == "tool_use"]
             if not tool_uses:
                 result.report = "\n".join(b.text for b in resp.content if b.type == "text").strip()

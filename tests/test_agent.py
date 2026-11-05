@@ -109,3 +109,22 @@ def test_write_report(toolbox, fake, tmp_path):
 def test_split_markdown_images():
     parts = split_markdown_images("a\n![t](charts/1.png)\nb")
     assert parts == [("text", "a\n"), ("image", "charts/1.png"), ("text", "\nb")]
+
+
+def test_unknown_block_types_are_passed_through(toolbox, fake):
+    class Thinking:
+        type = "thinking"
+
+        def model_dump(self, exclude_none=True):
+            return {"type": "thinking", "thinking": "plan", "signature": "sig"}
+
+    client = fake.Client(
+        [
+            fake.response(Thinking(), fake.tool_use("t1", "describe_dataset")),
+            fake.response(fake.text("ok"), stop="end_turn"),
+        ]
+    )
+    result = CSVAgent(toolbox, client=client).run("x")
+    assert result.report == "ok"
+    assistant = client.requests[1]["messages"][1]["content"]
+    assert assistant[0] == {"type": "thinking", "thinking": "plan", "signature": "sig"}
